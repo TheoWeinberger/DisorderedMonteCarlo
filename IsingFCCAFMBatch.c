@@ -1,0 +1,273 @@
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/*                                           Author: 8230W                                                 */
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/*                                          Code Description                                               */
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/* Code to run monte carlo simulation of the FCC AFM lattice. Runs the simulation over a specified         */
+/* temperature range with 100 logarithmically spaced steps over range. The system is equilibrated at each  */
+/* temperature and thermodynamic variables are measured. Meant to be run on the CSD3 with many iterations  */
+/* in parallel                                                                                             */
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/*                                               Inputs                                                    */
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/* Specify system size L to be studied, specify temperature range T for the system to be studied over      */
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/*                                               Outputs                                                   */
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/* Thermodynamics quantities, e, m and sublattice magentisations are produced                              */
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+/*Seed the random number generator.*/
+void seed_rng(void)
+{
+    int fp = open("/dev/urandom", O_RDONLY);
+    if (fp == -1) abort();
+    unsigned seed;
+    unsigned pos = 0;
+    while (pos < sizeof(seed)) {
+        int amt = read(fp, (char *) &seed + pos, sizeof(seed) - pos);
+        if (amt <= 0) abort();
+        pos += amt;
+    }
+    srand(seed);
+    close(fp);
+}
+
+
+/* function to produce a random float between 0 and 1 to be used by Metropolis Algorithm
+and determining initial spin configuration*/
+double rand_db()
+{
+    double rand_num = ((double)rand()/(double)(RAND_MAX)) * 1.0;
+    return rand_num;
+}
+
+/* function to compute the energy of a spin. Energy is computed as the sum
+of interactions of nearest neighbours in a Ising spin model with H = -J SUM(s_i*s_j)*/
+double Hamiltonian(double *** Spin_Array, int L, double Coupling, int i, int j, int k)
+{
+    double Energy;
+    Energy = - Coupling*(Spin_Array[i][j][k])*(Spin_Array [i?(i-1):(L-1)][j][k] + Spin_Array[(i+1)%L][j][k] +
+    Spin_Array[i][j?(j-1):(L-1)][k] + Spin_Array[i][(j+1)%L][k] + Spin_Array [i][j][k?(k-1):(L-1)] + Spin_Array[i][j][(k+1)%L] +
+    Spin_Array [i?(i-1):(L-1)][(j+1)%L][k] + Spin_Array[(i+1)%L][j?(j-1):(L-1)][k] + Spin_Array[i?(i-1):(L-1)][j][(k+1)%L] + Spin_Array[(i+1)%L][j][k?(k-1):(L-1)] +
+    Spin_Array[i][j?(j-1):(L-1)][(k+1)%L] + Spin_Array[i][(j+1)%L][k?(k-1):(L-1)]);
+    return Energy;
+}
+
+/* function which initialises the spin array randomly assigning them as either up or down*/
+void initialise( double *** Spin_Array, int L)
+{
+    int i,j,k;
+    for (i = 0; i < L; i++)
+    {
+        for (j = 0; j < L; j++)
+        {
+            for (k = 0; k < L; k++)
+            {
+                double rand_num = rand_db();
+                if(rand_num <= 0.5)
+                {
+                    Spin_Array[i][j][k] = -1.0; 
+                }
+                else
+                {
+                    Spin_Array[i][j][k] = 1.0;
+                }
+
+            }
+        }
+    }
+}
+
+void Measure(double *** Spin_Array, int L, double * Ave_Energy, double * Ave_Spin, double * M_1, double * M_2, double * M_3, double * M_4, double Coupling, int N)
+{
+
+    /*Reset measurements*/
+    *Ave_Energy = 0.0;
+
+    /*summed parameters for calculations*/
+    double M = 0.0;
+    double M_1_Total = 0.0;
+    double M_2_Total = 0.0;
+    double M_3_Total = 0.0;
+    double M_4_Total = 0.0;
+    double E = 0.0;
+    int i,j,k;
+    for (i = 0; i < L; i++)
+    {
+        for (j = 0; j < L; j++)
+        {
+            for (k = 0; k < L; k++)
+            {
+                if(i + j - k >= 0 && i + j - k < L && i - j + k >= 0 && i - j + k < L && - i + j + k >= 0 && - i + j + k < L)
+                {
+                    M_1_Total += Spin_Array[i+j-k][i-j+k][-i+j+k];
+                }
+                if(i + j - k + 1 >= 0 && i + j - k + 1 < L && i - j + k >= 0 && i - j + k < L && - i + j + k >= 0 && - i + j + k < L)
+                {
+                    M_2_Total += Spin_Array[i+j-k+1][i-j+k][-i+j+k];
+                }
+                if(i + j - k >= 0 && i + j - k < L && i - j + k + 1 >= 0 && i - j + k + 1< L && - i + j + k >= 0 && - i + j + k < L)
+                {
+                    M_3_Total += Spin_Array[i+j-k][i-j+k+1][-i+j+k];
+                }
+                if(i + j - k >= 0 && i + j - k < L && i - j + k >= 0 && i - j + k < L && - i + j + k + 1 >= 0 && - i + j + k + 1< L)
+                {
+                    M_4_Total += Spin_Array[i+j-k][i-j+k][-i+j+k+1];;
+                }
+                E += Hamiltonian(Spin_Array, L, Coupling, i, j, k)/2; 
+                M += Spin_Array[i][j][k];
+            }   
+        }
+    }
+    *M_1 = 4*M_1_Total/N;
+    *M_2 = 4*M_2_Total/N;
+    *M_3 = 4*M_3_Total/N;
+    *M_4 = 4*M_4_Total/N;
+    *Ave_Spin = M/N;
+    *Ave_Energy = E/N;
+}
+
+
+void MonteCarlo(double *** Spin_Array, double T, int Num_Cycles, int N, int L, double Coupling, double * Ave_Spin, double * M_1, double * M_2, double * M_3, double * M_4, double * Ave_Energy)
+{
+    /*Monte Carlo parameters*/
+    double Energy_Diff; /*Energy difference between states*/
+    double Boltz; /*Boltzmann Factor*/
+    double rand_num; /*Random Number*/
+    int i,j,k,a,b; /*Counting Variables*/
+
+    /*Metropolis Algorithm*/
+    for (a = 0; a < Num_Cycles; a++)
+    {
+        for (b = 0; b < N; b++)
+        {
+            /*Pick random spin*/
+            i = rand() % L;
+            j = rand() % L;
+            k = rand() % L;
+
+            /*Calculate Energy Difference*/
+            Energy_Diff = -2.0*Hamiltonian(Spin_Array, L, Coupling, i, j, k);
+            
+            /*Calculate Bolztmann Factor*/
+            Boltz = exp(-Energy_Diff/T);
+            
+            /*Decide whether to flip spin*/
+            rand_num = rand_db(); 
+            if (rand_num < Boltz)
+            {
+                Spin_Array[i][j][k]*=-1;
+            }
+        }
+    }
+
+    /*Calculate Observables*/
+    Measure(Spin_Array, L, Ave_Energy, Ave_Spin, M_1, M_2, M_3, M_4, Coupling, N);
+}
+
+
+int main()
+{
+    /*seed random number*/
+    //seed_rng();
+    srand((unsigned)time(NULL));
+
+    /*allocate array in memory for a cubic system of size L^3*/
+    int L = 20;
+    int i,j,k;
+
+    /*array that will be used to run simulations*/    
+    double *** Spin_Array = (double ***)malloc(L*sizeof(double**));
+    for (i = 0; i < L; i++)
+        {
+            Spin_Array[i] = (double **)malloc(L*sizeof(double *));
+            for (j = 0; j < L; j++)
+            {
+                Spin_Array[i][j] = (double*)malloc(L*sizeof(double));
+            }
+        }
+    
+    /* define system parameters */
+    int N = (L*L*L); /*number of spins in the system*/
+    double T; /*Dimensionless temperature T/J */
+    double Coupling = -1.0;
+
+    /*MonteCarlo Variables*/
+    int Num_Cycles; /*Number of cycles where one cycle includes N spin flips*/
+
+    /*define temperature parameters*/
+    double T_Init = 5; /*initial Temperature*/
+    double T_Final = 1.0; /*final Temperature chosen to be T_c/2. for AFM = 0.8 for FM = 4.5*/
+    double Temp_Scaling = pow(T_Final/T_Init, 1.0/100.0); /*scaling factor for temperature such that there are 100 steps between T_Init and T_Final*/
+
+    /*define MC time parameters*/
+    double Step_Scaling = 10.0; /*scaling factor for MC steps chosen according to Tm = 10000e^(x/T) such that Tm at T_final = 1000000*/
+
+    /*Measurements*/
+    double M_1 = 0.0;
+    double M_2 = 0.0;
+    double M_3 = 0.0;
+    double M_4 = 0.0;
+    double Ave_Spin = 0.0;
+    double Ave_Energy = 0.0;
+
+    int m = 0; /*counting parameters*/
+
+    /*Title columns*/
+    printf("Temperature,Average Energy,Average Spin,M1,M2,M3,M4,N\n");
+
+    /*Reset system*/
+    T = T_Init; /*set initial temp*/
+    Num_Cycles = round(2*exp(Step_Scaling/T)); /*Set initial number of cycles note additional factor of 2 to ensure equilibration*/
+
+    initialise(Spin_Array, L);
+
+    MonteCarlo(Spin_Array, 100, 10, N, L, Coupling, &Ave_Spin, &M_1, &M_2, &M_3, &M_4, &Ave_Energy); /*Run a few runs at a high temperature to scramble the system each time*/
+
+    for (m = 0; m < 100; m++)
+    {
+        /*Run Simulation*/
+        MonteCarlo(Spin_Array, T, Num_Cycles, N, L, Coupling, &Ave_Spin, &M_1, &M_2, &M_3, &M_4, &Ave_Energy);
+
+        /*Store measurements in data file*/
+        printf("%f,%f,%f,%f,%f,%f,%f,%d\n", T, Ave_Energy, Ave_Spin, M_1, M_2, M_3,M_4, N);
+
+        /*Step Temperature*/
+        T*=Temp_Scaling;
+
+        /*Calculate number of steps for next cycle*/
+        Num_Cycles = exp(Step_Scaling/T);
+
+    }   
+
+    //FILE *fp;
+    //fp = fopen("IsingAFMGS.csv","w+");   
+    //
+    //fprintf(fp, "i,j,k,Spin\n");
+    //
+    ///*print to output data file*/
+    //for (i = 0; i < L; i++)
+    //{
+    //    for (j = 0; j < L; j++)
+    //    {
+    //        for (k = 0; k < L; k++)
+    //        {
+    //            fprintf(fp,"%d,%d,%d,%f\n", i, j, k, Spin_Array[i][j][k]);
+    //        }      
+    //    }
+    //}
+    //fclose(fp);
+
+    return 0;
+}
